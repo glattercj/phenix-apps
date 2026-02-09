@@ -773,30 +773,17 @@ def usec_to_sec(val: Union[int, float]) -> float:
 
 def eprint(msg: str, ui: bool = True) -> None:
     """
-    Prints errors to STDERR, and optionally flushed to STDOUT so it also
-    gets streamed to the phenix UI.
+    Prints errors to STDERR via logger.
     """
-
-    print(msg, file=sys.stderr)
-
-    if ui:
-        tstamp = time.strftime('%H:%M:%S')
-        print(f'[{tstamp}] ERROR : {msg}', flush=True)
-
-    logger.error(msg)  # write error to phenix log file
+    # The ui arg is kept for signature compatibility but ignored as logging handles output.
+    logger.error(msg)
 
 
 def print_msg(msg: str, ts: bool = True) -> None:
     """
-    Prints msg to STDOUT, flushing it immediately so it gets streamed to the
-    phenix UI in a timely manner.
+    Prints msg to logger.info.
     """
-
-    if ts:
-        tstamp = time.strftime('%H:%M:%S')
-        print(f'[{tstamp}] {msg}', flush=True)
-    else:
-        print(msg, flush=True)
+    logger.info(msg)
 
 
 # *** ELASTICSEARCH FUNCTIONS ***

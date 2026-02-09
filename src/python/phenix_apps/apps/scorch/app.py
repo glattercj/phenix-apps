@@ -12,7 +12,7 @@ import json
 
 from phenix_apps.common.settings import PHENIX_DIR
 from phenix_apps.common import utils
-from phenix_apps.common.logger import logger
+from phenix_apps.common.logger import logger, LOG_FORMAT
 
 from box import Box
 from elasticsearch import Elasticsearch
@@ -22,7 +22,7 @@ class ComponentBase(object):
     valid_stages = ["configure", "start", "stop", "cleanup"]
 
     @classmethod
-    def check_stdin(klass) -> None:
+    def check_stdin(cls) -> None:
         """
         Ensures that only one argument is passed in via the command line
         This takes in the stage as the first argument ?
@@ -30,44 +30,16 @@ class ComponentBase(object):
         """
 
         if len(sys.argv) != 6:
-            klass.eprint(f'must pass exactly five arguments to scorch component: was passed {len(sys.argv) - 1}')
-            klass.eprint("scorch component expects <run_stage> <component_name> <run_id> <current_loop> <current_loop_count> << <json_input>")
+            logger.error(f'must pass exactly five arguments to scorch component: was passed {len(sys.argv) - 1}')
+            logger.error("scorch component expects <run_stage> <component_name> <run_id> <current_loop> <current_loop_count> << <json_input>")
 
             sys.exit(1)
 
-        if sys.argv[1] not in klass.valid_stages:
-            klass.eprint(f'{sys.argv[1]} is not a valid stage')
-            klass.eprint(f'Valid stages are: {klass.valid_stages}')
+        if sys.argv[1] not in cls.valid_stages:
+            logger.error(f'{sys.argv[1]} is not a valid stage')
+            logger.error(f'Valid stages are: {cls.valid_stages}')
 
             sys.exit(1)
-
-    @staticmethod
-    def eprint(msg: str, ui: bool = True):
-        """
-        Prints errors to STDERR, and optionally flushed to STDOUT so it also
-        gets streamed to the phenix UI.
-        """
-
-        print(msg, file=sys.stderr)
-
-        if ui:
-            tstamp = time.strftime('%Y-%m-%dT%H:%M:%S')
-            print(f'[{tstamp}] ERROR : {msg}', flush=True)
-
-        logger.error(msg)  # write error to phenix log file
-
-    @staticmethod
-    def print(msg: str, ts: bool = True):
-        """
-        Prints msg to STDOUT, flushing it immediately so it gets streamed to the
-        phenix UI in a timely manner.
-        """
-
-        if ts:
-            tstamp = time.strftime('%Y-%m-%dT%H:%M:%S')
-            print(f'[{tstamp}] {msg}', flush=True)
-        else:
-            print(msg, flush=True)
 
     def __init__(self, typ: str) -> None:
         self.type: str = typ
@@ -88,7 +60,7 @@ class ComponentBase(object):
         try:
             self.experiment: Box = Box.from_json(self.raw_input)
         except Exception as ex:
-            self.eprint(f"Failed to parse experiment JSON for scorch component '{self.name}': {ex}")
+            logger.error(f"Failed to parse experiment JSON for scorch component '{self.name}': {ex}")
             sys.exit(1)
 
         self.exp_name: str = self.experiment.spec.experimentName
@@ -122,7 +94,6 @@ class ComponentBase(object):
             'cleanup'   : self.cleanup
         }
 
-        orig_logger_log = logger.log
         orig_stdout_stream = sys.stdout
         orig_stderr_stream = sys.stderr
         log_buffer = io.StringIO()
@@ -131,9 +102,15 @@ class ComponentBase(object):
         stdout_mirror = _MirrorAndBuffer(orig_stdout_stream, io.StringIO())
         stderr_mirror = _MirrorAndBuffer(orig_stderr_stream, io.StringIO())
 
-        # override phenix's logger to save to the buffer
-        # we use a lambda function because level and msg do not exist until the logger calls this function
-        logger.log = lambda level, msg: self.buffer_logger_log(level, msg, log_buffer, orig_logger_log)
+        # Remove existing handlers to avoid duplication in stderr mirror and add buffer sink
+        logger.remove()
+        handler_id = logger.add(
+            log_buffer,
+            format=LOG_FORMAT,
+            backtrace=True,
+            diagnose=True,
+            colorize=False,
+        )
 
         start = time.time()
 
@@ -146,7 +123,7 @@ class ComponentBase(object):
         finally:
             sys.stdout = orig_stdout_stream
             sys.stderr = orig_stderr_stream
-            logger.log = orig_logger_log
+            logger.remove(handler_id)
 
         end = time.time()
 
@@ -180,15 +157,6 @@ class ComponentBase(object):
         }
         with open(info_file, 'w') as f:
             json.dump(content, f, indent=2)
-
-    # override phenix's logger buffer_logger_log to also save to our buffer
-    def buffer_logger_log(self, level, msg, log_buffer, orig_logger_log):
-        try:
-            tstamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-            log_buffer.write(f'[{tstamp}] {level} : {msg}\n')
-        except Exception as ex:
-            print(f"Error writing to log buffer: {ex}")
-        orig_logger_log(level, msg)
 
     def _format_stream(self, s):
         if not s:
@@ -234,7 +202,7 @@ class ComponentBase(object):
     def es(self) -> Elasticsearch:
         """Connect to Elasticsearch and return the initialized object."""
         if not self._es:
-            self.print(f"Connecting to Elasticsearch: {self.metadata.elasticsearch.server}")
+            logger.info(f"Connecting to Elasticsearch: {self.metadata.elasticsearch.server}")
             self._es = utils.connect_elastic(self.metadata.elasticsearch.server)
         return self._es
 
@@ -276,7 +244,7 @@ class ComponentBase(object):
         for app in self.experiment.spec.scenario.apps:
             if app.name == name:
                 return app
-        self.eprint(f"failed to find app '{name}'")
+        logger.error(f"failed to find app '{name}'")
 
     def extract_node(self, hostname: str, wildcard: bool = False) -> Box | list[Box] | None:
         if wildcard:
@@ -328,16 +296,16 @@ class ComponentBase(object):
         """
         hostname = config.get('hostname')
         if not hostname:
-            self.eprint(f'no hostname provided for VM config {config}')
+            logger.error(f'no hostname provided for VM config {config}')
             sys.exit(1)
 
         node = self.extract_node(hostname)
         if not node:
-            self.eprint(f'failed to find node "{hostname}" (config={config})')
+            logger.error(f'failed to find node "{hostname}" (config={config})')
             sys.exit(1)
 
         if not node.network.interfaces:
-            self.eprint(f'no interfaces defined for node {hostname}! (node={node}, config={config})')
+            logger.error(f'no interfaces defined for node {hostname}! (node={node}, config={config})')
             sys.exit(1)
 
         # Default to interface 0
@@ -363,20 +331,20 @@ class ComponentBase(object):
         elif not dst and isinstance(src, list):
             dst = self.base_dir
 
-        self.print(f"copying file from {vm} (src={src}, dst={dst})")
+        logger.info(f"copying file from {vm} (src={src}, dst={dst})")
 
         try:
             utils.mm_recv(self.mm, vm, src, dst)
-            self.print(f"file '{src}' received from VM {vm} to {dst}")
+            logger.info(f"file '{src}' received from VM {vm} to {dst}")
         except Exception as ex:
-            self.eprint(f"error receiving file '{src}' from VM {vm}: {ex}")
+            logger.error(f"error receiving file '{src}' from VM {vm}: {ex}")
             sys.exit(1)
 
     def ensure_vm_running(self, vm: str) -> None:
-        self.print(f"Checking if VM is running (VM hostname: {vm})")
+        logger.info(f"Checking if VM is running (VM hostname: {vm})")
         vm_info = utils.mm_info_for_vm(self.mm, vm)
         if not vm_info or vm_info["state"].lower() != "running":
-            self.eprint(f"VM isn't running (vm name: {vm})")
+            logger.error(f"VM isn't running (vm name: {vm})")
             sys.exit(1)
 
     def run_and_check_command(
@@ -400,7 +368,7 @@ class ComponentBase(object):
         )
 
         if resp["exitcode"] != 0:
-            self.eprint(f"failed to run '{cmd}'\nexitcode: {resp['exitcode']}\nstdout: {resp['stdout']}\nstderr: {resp['stderr']}")
+            logger.error(f"failed to run '{cmd}'\nexitcode: {resp['exitcode']}\nstdout: {resp['stdout']}\nstderr: {resp['stderr']}")
             sys.exit(1)
 
         return resp
@@ -419,7 +387,7 @@ class ComponentBase(object):
         if process.lower() in ps_list.lower():
             return True
         else:
-            self.eprint(f"process '{process}' is not running on '{vm}'")
+            logger.error(f"process '{process}' is not running on '{vm}'")
             return False
 
     def configure(self) -> None:

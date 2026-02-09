@@ -400,16 +400,10 @@ echo 'DONE!'
         title = f"Scale App Summary ({plugin_str}) - {len(rows)} Nodes ({len(self.get_profiles())} Profiles):"
 
         # Styles
-        if self.dryrun:
-            title_style = "bold magenta"
-            header_style = "bold blue"
-            border_style = "blue"
-            row_style = "green"
-        else:
-            title_style = "bold"
-            header_style = "bold cyan"
-            border_style = "white"
-            row_style = None
+        title_style = "bold"
+        header_style = "bold cyan"
+        border_style = "white"
+        row_style = None
 
         table = Table(
             title=title,
@@ -434,19 +428,13 @@ echo 'DONE!'
 
         for row in formatted_rows:
             row = [str(v) for v in row]
-            if row_style:
-                table.add_row(*row, style=row_style)
-            else:
-                table.add_row(*row)
+            table.add_row(*row)
 
-        if self.dryrun:
-            console = Console(stderr=True)
-            console.print()
-            console.print(table)
-        else:
-            console = Console(file=io.StringIO(), force_terminal=False, width=120)
-            console.print(table)
-            logger.info(f"\n{console.file.getvalue()}")
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False, width=120)
+        console.print(table)
+        for line in buf.getvalue().splitlines():
+            logger.info("{}", line)
 
     def _process_networks(
         self, networks: list[dict[str, Any]]
